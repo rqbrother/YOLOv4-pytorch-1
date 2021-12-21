@@ -1,4 +1,7 @@
 import shutil
+
+import torch
+
 from eval import voc_eval
 from utils.data_augment import *
 from utils.tools import *
@@ -11,6 +14,7 @@ import multiprocessing
 from multiprocessing.dummy import Pool as ThreadPool        # 线程池
 from collections import defaultdict
 current_milli_time = lambda: int(round(time.time() * 1000))
+import torchvision
 
 
 class Evaluator(object):
@@ -23,7 +27,7 @@ class Evaluator(object):
             self.classes = cfg.Customer_DATA["CLASSES"]
         self.pred_result_path = os.path.join(cfg.PROJECT_PATH, "pred_result")
         self.val_data_path = os.path.join(
-            cfg.DATA_PATH, "VOCtest-2007", "VOCdevkit", "VOC2007"
+            cfg.DATA_PATH, "VOCdevkit", "VOC2007"
         )
         self.conf_thresh = cfg.VAL["CONF_THRESH"]
         self.nms_thresh = cfg.VAL["NMS_THRESH"]
@@ -53,11 +57,16 @@ class Evaluator(object):
             os.mkdir(output_path)
         os.mkdir(self.pred_result_path)
         imgs_count = len(img_inds)
-        cpu_nums = multiprocessing.cpu_count()
-        pool = ThreadPool(cpu_nums)
-        with tqdm(total=imgs_count) as pbar:
-            for i, _ in enumerate(pool.imap_unordered(self.Single_APs_voc, img_inds)):
-                pbar.update()
+        # cpu_nums = multiprocessing.cpu_count()
+        # pool = ThreadPool(cpu_nums)
+        with torch.no_grad():
+            infer_results = list()
+            for ind in tqdm(img_inds):
+                img_path = os.path.join(self.val_data_path, 'JPEGImages', ind + '.jpg')
+                img = cv2.imread(img_path)
+
+
+                self.Single_APs_voc(ind)
         for class_name in self.final_result:
             with open(os.path.join(self.pred_result_path, 'comp4_det_test_' + class_name + '.txt'), 'a') as f:
                 str_result = ''.join(self.final_result[class_name])
@@ -68,6 +77,7 @@ class Evaluator(object):
     def Single_APs_voc(self, img_ind):
         img_path = os.path.join(self.val_data_path, 'JPEGImages', img_ind + '.jpg')
         img = cv2.imread(img_path)
+        # inference
         bboxes_prd = self.get_bbox(img, self.multi_scale_test, self.flip_test)
 
         if bboxes_prd.shape[0] != 0  and self.visual_imgs < 100:
@@ -95,28 +105,78 @@ class Evaluator(object):
 
     def get_bbox(self, img, multi_test=False, flip_test=False, mode=None):
         if multi_test:
-            test_input_sizes = range(320, 640, 96)
-            bboxes_list = []
-            for test_input_size in test_input_sizes:
-                valid_scale = (0, np.inf)
-                bboxes_list.append(
-                    self.__predict(img, test_input_size, valid_scale, mode)
-                )
-                if flip_test:
-                    bboxes_flip = self.__predict(
-                        img[:, ::-1], test_input_size, valid_scale, mode
-                    )
-                    bboxes_flip[:, [0, 2]] = (
-                        img.shape[1] - bboxes_flip[:, [2, 0]]
-                    )
-                    bboxes_list.append(bboxes_flip)
-            bboxes = np.row_stack(bboxes_list)
+            # test_input_sizes = range(320, 640, 96)
+            # bboxes_list = []
+            # for test_input_size in test_input_sizes:
+            #     valid_scale = (0, np.inf)
+            #     bboxes_list.append(
+            #         self.__predict(img, test_input_size, valid_scale, mode)
+            #     )
+            #     if flip_test:
+            #         bboxes_flip = self.__predict(
+            #             img[:, ::-1], test_input_size, valid_scale, mode
+            #         )
+            #         bboxes_flip[:, [0, 2]] = (
+            #             img.shape[1] - bboxes_flip[:, [2, 0]]
+            #         )
+            #         bboxes_list.append(bboxes_flip)
+            # bboxes = np.row_stack(bboxes_list)
+            pass
         else:
             bboxes = self.__predict(img, self.val_shape, (0, np.inf), mode)
 
-        bboxes = nms(bboxes, self.conf_thresh, self.nms_thresh)
+        # postprocess have nms and convert into xyxy
+        # bboxes = nms(bboxes, self.conf_thresh, self.nms_thresh)
 
         return bboxes
+
+    def nms_postprocess(self, prediction, num_classes, conf_thre=0.05, nms_thre=0.5, class_agnostic=False):
+        prediction = prediction.unsqueeze(0)
+        box_corner = prediction.new(prediction.shape)
+        box_corner[:, :, 0] = prediction[:, :, 0] - prediction[:, :, 2] / 2
+        box_corner[:, :, 1] = prediction[:, :, 1] - prediction[:, :, 3] / 2
+        box_corner[:, :, 2] = prediction[:, :, 0] + prediction[:, :, 2] / 2
+        box_corner[:, :, 3] = prediction[:, :, 1] + prediction[:, :, 3] / 2
+        prediction[:, :, :4] = box_corner[:, :, :4]
+
+        output = [None for _ in range(len(prediction))]
+        for i, image_pred in enumerate(prediction):
+
+            # If none are remaining => process next image
+            if not image_pred.size(0):
+                continue
+            # Get score and class with highest confidence
+            class_conf, class_pred = torch.max(image_pred[:, 5: 5 + num_classes], 1, keepdim=True)
+
+            conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= conf_thre).squeeze()
+            # Detections ordered as (x1, y1, x2, y2, obj_conf, class_conf, class_pred)
+            detections = torch.cat((image_pred[:, :5], class_conf, class_pred.float()), 1)
+            detections = detections[conf_mask]
+            if not detections.size(0):
+                continue
+
+            if class_agnostic:
+                nms_out_index = torchvision.ops.nms(
+                    detections[:, :4],
+                    detections[:, 4] * detections[:, 5],
+                    nms_thre,
+                )
+            else:
+                nms_out_index = torchvision.ops.batched_nms(
+                    detections[:, :4],
+                    detections[:, 4] * detections[:, 5],
+                    detections[:, 6],
+                    nms_thre,
+                )
+
+            detections = detections[nms_out_index]
+            if output[i] is None:
+                output[i] = detections
+            else:
+                output[i] = torch.cat((output[i], detections))
+
+        return output
+
 
     def __predict(self, img, test_shape, valid_scale, mode):
         org_img = np.copy(img)
@@ -132,11 +192,13 @@ class Evaluator(object):
                 _, p_d = self.model(img)
             self.inference_time += current_milli_time() - start_time
         pred_bbox = p_d.squeeze().cpu().numpy()
-        bboxes = self.__convert_pred(
-            pred_bbox, test_shape, (org_h, org_w), valid_scale
-        )
-        if self.showatt and len(img) and mode == 'det':
-            self.__show_heatmap(atten, org_img)
+        # bboxes = self.__convert_pred(
+        #     pred_bbox, test_shape, (org_h, org_w), valid_scale
+        # )
+        # using default config parameter
+        bboxes = self.nms_postprocess(p_d, 20, 0.005, 0.45)
+        # if self.showatt and len(img) and mode == 'det':
+        #     self.__show_heatmap(atten, org_img)
         return bboxes
 
     def __show_heatmap(self, beta, img):
@@ -223,7 +285,7 @@ class Evaluator(object):
         cachedir = os.path.join(self.pred_result_path, "cache")
         # annopath = os.path.join(self.val_data_path, 'Annotations', '{:s}.xml')
         annopath = os.path.join(
-            self.val_data_path, "Annotations\\" + "{:s}.xml"
+            self.val_data_path, "Annotations/" + "{:s}.xml"
         )
         imagesetfile = os.path.join(
             self.val_data_path, "ImageSets", "Main", "test.txt"

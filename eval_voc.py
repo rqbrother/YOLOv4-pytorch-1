@@ -40,7 +40,8 @@ class Evaluation(object):
 
         weight = os.path.join(weight_path)
         chkpt = torch.load(weight, map_location=self.__device)
-        self.__model.load_state_dict(chkpt["model"])
+        # self.__model.load_state_dict(chkpt["model"])
+        self.__model.load_state_dict(chkpt)
         print("loading weight file is done")
         del chkpt
 
@@ -49,16 +50,16 @@ class Evaluation(object):
         logger.info("***********Start Evaluation****************")
         start = time.time()
         mAP = 0
-        with torch.no_grad():
-                APs, inference_time = Evaluator(
-                    self.__model, showatt=False
-                ).APs_voc()
-                for i in APs:
-                    logger.info("{} --> mAP : {}".format(i, APs[i]))
-                    mAP += APs[i]
-                mAP = mAP / self.__num_class
-                logger.info("mAP:{}".format(mAP))
-                logger.info("inference time: {:.2f} ms".format(inference_time))
+        # with torch.no_grad():
+        APs, inference_time = Evaluator(
+            self.__model, showatt=False
+        ).APs_voc()
+        for i in APs:
+            logger.info("{} --> mAP : {}".format(i, APs[i]))
+            mAP += APs[i]
+        mAP = mAP / self.__num_class
+        logger.info("mAP:{}".format(mAP))
+        logger.info("inference time: {:.2f} ms".format(inference_time))
         end = time.time()
         logger.info("  ===val cost time:{:.4f}s".format(end - start))
 
@@ -101,7 +102,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--weight_path",
         type=str,
-        default="weight/best.pt",
+        default="weight/voc_best.pt",
         help="weight file path",
     )
     parser.add_argument(
@@ -110,7 +111,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--gpu_id",
         type=int,
-        default=-1,
+        default=0,
         help="whither use GPU(eg:0,1,2,3,4,5,6,7,8) or CPU(-1)",
     )
     parser.add_argument(
@@ -130,12 +131,13 @@ if __name__ == "__main__":
     ).get_log()
 
     if opt.mode == "val":
-        Evaluation(
+        eval = Evaluation(
             gpu_id=opt.gpu_id,
             weight_path=opt.weight_path,
             visiual=opt.visiual,
             mode=opt.mode
-        ).val()
+        )
+        eval.val()
     else:
         Evaluation(
             gpu_id=opt.gpu_id,

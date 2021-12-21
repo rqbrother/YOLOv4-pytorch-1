@@ -7,7 +7,7 @@ DATA_PATH = osp.join(PROJECT_PATH, 'data')
 
 
 MODEL_TYPE = {
-    "TYPE": "CoordAttention-YOLOv4"
+    "TYPE": "Mobilenet-YOLOv4"
 }  # YOLO type:YOLOv4, Mobilenet-YOLOv4, CoordAttention-YOLOv4 or Mobilenetv3-YOLOv4
 
 CONV_TYPE = {"TYPE": "DO_CONV"}  # conv type:DO_CONV or GENERAL
@@ -36,7 +36,7 @@ TRAIN = {
 
 # val
 VAL = {
-    "TEST_IMG_SIZE": 416,
+    "TEST_IMG_SIZE": 608,
     "BATCH_SIZE": 1,
     "NUMBER_WORKERS": 0,
     "CONF_THRESH": 0.005,
